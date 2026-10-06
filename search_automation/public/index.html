@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Store Locator Search Audit</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>Store Locator Search Audit</h1>
+    <p class="subtitle">Import client URLs from a sheet, run the search-functionality checks, export the results.</p>
+  </header>
+
+  <main>
+    <section class="panel" id="import-panel">
+      <h2>1. Import URLs</h2>
+      <div class="import-row">
+        <label class="file-drop" for="file-input">
+          <input type="file" id="file-input" accept=".csv,.xlsx,.xls">
+          <span>Choose a .csv or .xlsx file&hellip;</span>
+        </label>
+        <button id="load-config-btn" type="button" class="secondary">Load saved sites</button>
+        <button id="add-row-btn" type="button" class="secondary">+ Add row manually</button>
+      </div>
+      <p class="hint">Expected columns: a name/client column and a URL column (any order, header names
+        flexible — e.g. "Clients"/"URLs"). No header row also works if column A = name, column B = URL.</p>
+      <div id="import-warnings" class="warnings" hidden></div>
+
+      <table id="sites-table">
+        <thead>
+          <tr><th>Name</th><th>URL</th><th></th></tr>
+        </thead>
+        <tbody id="sites-tbody"></tbody>
+      </table>
+      <p id="sites-empty-hint" class="hint">No sites loaded yet.</p>
+    </section>
+
+    <section class="panel" id="run-panel">
+      <h2>2. Run</h2>
+      <div class="run-row">
+        <button id="run-btn" type="button" disabled>Run Audit</button>
+        <span id="run-status" class="run-status"></span>
+      </div>
+      <div id="site-cards"></div>
+      <details id="log-details">
+        <summary>Live log</summary>
+        <pre id="log-output"></pre>
+      </details>
+    </section>
+
+    <section class="panel" id="export-panel">
+      <h2>3. Export</h2>
+      <button id="export-btn" type="button" disabled>Export Results as CSV</button>
+      <p class="hint">One row per scenario check, across every site in this run.</p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

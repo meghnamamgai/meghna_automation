@@ -1,0 +1,18 @@
+{
+  "name": "storelocator-search-audit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Functional test automation for SingleInterface store locator search widgets (locality/custom search, Advanced Search dropdowns, radius-gated progressive search, route search) across multiple client microsites",
+  "type": "commonjs",
+  "main": "src/searchAudit.js",
+  "scripts": {
+    "search-audit": "node src/searchAudit.js",
+    "server": "node src/server.js"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^4.21.2",
+    "multer": "^2.0.1",
+    "puppeteer": "^24.43.1"
+  }
+}

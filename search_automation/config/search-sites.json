@@ -1,0 +1,11 @@
+{
+  "sites": [
+    { "name": "nayara-energy-uat", "url": "https://testing.singleinterface.com/storelocator/178581" },
+    { "name": "ujjivan-sfb", "url": "https://nearme.ujjivansfb.bank.in/" },
+    { "name": "hamleys", "url": "https://stores.hamleys.in/" },
+    { "name": "jktyre", "url": "https://brandshops.jktyre.com/" },
+    { "name": "audi", "url": "https://dealers.myaudi.in/" },
+    { "name": "skoda", "url": "https://dealers.skoda-auto.co.in/" },
+    { "name": "hplubes", "url": "https://workshop.hplubricants.in/?lat=30.371331&long=76.785391" }
+  ]
+}

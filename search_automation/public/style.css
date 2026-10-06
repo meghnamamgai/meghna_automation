@@ -1,0 +1,237 @@
+:root {
+  color-scheme: light dark;
+  --bg: #faf6f0;
+  --panel: #ffffff;
+  --border: #e0e0e0;
+  --text: #1a1a1a;
+  --muted: #666;
+  --pass: #0a7a2f;
+  --fail: #b00020;
+  --skip: #8a6d00;
+  --accent: #2f5fd6;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  padding: 24px 32px 12px;
+  text-align: center;
+}
+
+header h1 {
+  margin: 0 0 4px;
+  font-size: 22px;
+}
+
+.subtitle {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+main {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 0 32px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 20px 24px;
+}
+
+.panel h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 6px 0 0;
+}
+
+.import-row, .run-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.file-drop {
+  display: inline-flex;
+  align-items: center;
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.file-drop input { display: none; }
+
+button {
+  font: inherit;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+button.secondary {
+  background: transparent;
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+button.small {
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 14px;
+  font-size: 13px;
+}
+
+th, td {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 8px;
+  text-align: left;
+}
+
+#sites-table td {
+  vertical-align: top;
+}
+
+#sites-table td:last-child {
+  padding-top: 6px;
+}
+
+td input {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  font: inherit;
+  padding: 2px 4px;
+}
+
+td input:focus {
+  border-color: var(--border);
+  background: var(--bg);
+}
+
+td input.invalid {
+  border-color: var(--fail);
+  background: rgba(176, 0, 32, 0.06);
+}
+
+.field-error {
+  color: var(--fail);
+  font-size: 11px;
+  min-height: 14px;
+  margin-top: 2px;
+}
+
+.warnings {
+  background: #fff6e5;
+  border: 1px solid #f0d38a;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 13px;
+  margin-top: 10px;
+}
+
+.warnings ul { margin: 4px 0 0; padding-left: 18px; }
+
+.run-status {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+#site-cards {
+  margin-top: 16px;
+}
+
+.results-table tr.result-row {
+  cursor: pointer;
+}
+
+.results-table tr.result-row:hover {
+  background: var(--bg);
+}
+
+.results-table td.site-url-cell {
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.results-table td.status-cell { font-weight: 600; white-space: nowrap; }
+.results-table tr.status-pass td.status-cell { color: var(--pass); }
+.results-table tr.status-fail td.status-cell { color: var(--fail); }
+.results-table tr.status-running td.status-cell { color: var(--muted); font-weight: 400; }
+
+.results-table tr.detail-row td {
+  padding: 0 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.count-pass { color: var(--pass); font-weight: 600; }
+.count-fail { color: var(--fail); font-weight: 600; }
+.count-skip { color: var(--skip); font-weight: 600; }
+
+.scenario-table {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.scenario-table tr.PASS td.status { color: var(--pass); font-weight: 600; }
+.scenario-table tr.FAIL td.status { color: var(--fail); font-weight: 600; }
+.scenario-table tr.SKIP td.status { color: var(--skip); font-weight: 600; }
+
+#log-details {
+  margin-top: 16px;
+  font-size: 12px;
+}
+
+#log-output {
+  max-height: 220px;
+  overflow-y: auto;
+  background: #111;
+  color: #ddd;
+  padding: 10px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16171a;
+    --panel: #1f2023;
+    --border: #33343a;
+    --text: #eaeaea;
+    --muted: #999;
+  }
+  .warnings { background: #332a10; border-color: #6b551c; color: #eaeaea; }
+}
