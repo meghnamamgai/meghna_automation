@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { launchBrowser, auditSite, slugify, timestamp } = require('./auditRunner');
+const { launchBrowser, auditSite, runWithConcurrency, getConcurrency, slugify, timestamp } = require('./auditRunner');
 const { buildSearchReportHtml } = require('./searchReport');
 
 const REPORTS_DIR = path.join(__dirname, '..', 'reports', 'search-audit');
@@ -59,11 +59,11 @@ async function main() {
   }
 
   const browser = await launchBrowser();
-  const siteReports = [];
+  let siteReports;
   try {
-    for (const site of targets) {
-      siteReports.push(await auditSite(site, browser, { onLog: (line) => console.log(line) }));
-    }
+    siteReports = await runWithConcurrency(targets, getConcurrency(), (site) =>
+      auditSite(site, browser, { onLog: (line) => console.log(targets.length > 1 ? `[${site.name}] ${line}` : line) })
+    );
   } finally {
     await browser.close();
   }

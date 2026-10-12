@@ -8,7 +8,7 @@ const { EventEmitter } = require('events');
 const express = require('express');
 const multer = require('multer');
 const ExcelJS = require('exceljs');
-const { launchBrowser, auditSite } = require('./auditRunner');
+const { launchBrowser, auditSite, runWithConcurrency, getConcurrency } = require('./auditRunner');
 
 const PORT = process.env.PORT || 4173;
 const CONFIG_PATH = path.join(__dirname, '..', 'config', 'search-sites.json');
@@ -218,18 +218,17 @@ app.get('/api/audit/stream/:runId', (req, res) => {
 
 async function runAll(runId, sites) {
   const browser = await launchBrowser();
-  const reports = [];
+  let reports;
   try {
-    for (let i = 0; i < sites.length; i++) {
-      const site = sites[i];
+    reports = await runWithConcurrency(sites, getConcurrency(), async (site, i) => {
       pushEvent(runId, { type: 'site-start', site, index: i, total: sites.length });
       const report = await auditSite(site, browser, {
-        onLog: (line) => pushEvent(runId, { type: 'log', site, index: i, line }),
+        onLog: (line) => pushEvent(runId, { type: 'log', site, index: i, line: sites.length > 1 ? `[${site.name || site.url}] ${line}` : line }),
         onGroupComplete: (groupName, groupResults) => pushEvent(runId, { type: 'group', site, index: i, groupName, results: groupResults }),
       });
-      reports.push(report);
       pushEvent(runId, { type: 'site-done', site, index: i, report });
-    }
+      return report;
+    });
   } finally {
     await browser.close().catch(() => {});
   }

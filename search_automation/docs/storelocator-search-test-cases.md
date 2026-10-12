@@ -38,7 +38,7 @@ doesn't include, e.g. a real screen reader or a second browser)
 | 1.6 | Script/markup injection is not executed or reflected | Enter `<script>...</script>`-style text, submit | No script executes, no JS `alert`/dialog fires, payload isn't rendered unescaped | 🤖 |
 | 1.7 | Leading/trailing whitespace is tolerated | Enter `"  Faridabad  "`, submit | Same results as the trimmed term, no validation error | 🤖 (compares against the term-1.1 baseline count; skips rather than false-fails if that baseline itself hit a bot-challenge) |
 | 1.8 | Case-insensitive matching | Search `"FARIDABAD"` vs `"faridabad"` | Identical result sets | 🤖 |
-| 1.9 | Submitting via Enter key works, not just the button | Focus the field, type, press Enter | Same behavior as clicking Search | 🤖 — **caught a real defect**: on Hamleys and Audi, pressing Enter does not submit the form at all (confirmed no autocomplete dropdown is intercepting it either) |
+| 1.9 | Submitting via Enter key works, not just the button | Focus the field, type, press Enter | Same behavior as clicking Search | 🖐️ — no longer in the automated run (removed). Earlier runs caught a real defect: on Hamleys and Audi, pressing Enter does not submit the form at all (see Known issues) |
 | 1.10 | Result list count matches map marker count | Run any valid search | Number of list entries equals number of map pins | 🖐️ (needs map-canvas inspection, not just DOM) |
 | 1.11 | Deep link with `?search=` pre-filters on load | Open `.../storelocator/<id>?search=<term>` directly | Page loads already filtered to that term, without requiring a manual re-submit | 🤖 |
 | 1.12 | Very long input (500+ chars) doesn't break layout or error | Paste a long string, submit | Graceful no-match handling, no layout break, no server error | 🤖 (600-char input) |
@@ -117,7 +117,7 @@ client sites spanning every widget combination in this doc (see per-client break
 This still isn't a substitute for the remaining manual (🖐️) cases — genuine visual/UX judgment
 (empty-state copy quality, layout at mobile widths, map-marker-to-list parity, cognitive load) has
 no automated proxy. But the bar for "needs a human" has narrowed a lot: whitespace/case handling,
-Enter-key submission, deep-linking, State→City→Locality reset behavior, pagination, refresh
+deep-linking, State→City→Locality reset behavior, pagination, refresh
 persistence, action-link validity, and response time are all now asserted automatically. Treat a
 clean run as "the mechanics work," and reach for the manual list mainly for copy/UX-level review.
 

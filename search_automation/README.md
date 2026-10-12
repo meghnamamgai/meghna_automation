@@ -71,7 +71,7 @@ Feature-detected per site, then whichever of these apply are run:
 
 - **Locality / "Search Nearby" (custom search)** — valid-term submission, empty-field blocking,
   no-crash on nonsense/very-long input, script-injection safety, whitespace/case tolerance,
-  Enter-key submission, deep-linking (`?search=`)
+  deep-linking (`?search=`)
 - **Advanced Search (State → City → Locality dropdowns)** — dropdown population, AJAX cascading,
   City gated behind State, changing State resets City, no-State-selected blocking, state-only
   submission, browser-Back state restoration

@@ -112,10 +112,13 @@ function renderSites() {
 
     const actionTd = document.createElement('td');
     const removeBtn = document.createElement('button');
-    removeBtn.className = 'secondary small';
+    removeBtn.className = 'secondary small remove-btn';
     removeBtn.textContent = 'Remove';
+    removeBtn.disabled = running;
     removeBtn.addEventListener('click', () => {
+      if (running) return;
       sites.splice(i, 1);
+      resetRunPanel();
       renderSites();
     });
     actionTd.appendChild(removeBtn);
@@ -128,6 +131,20 @@ function renderSites() {
 
 function updateRunButton() {
   runBtn.disabled = running || sites.length === 0 || !allRowsValid() || !hasAtLeastOneRunnableSite();
+  // Removing a site mid-run would leave the live results out of sync with the list.
+  sitesTbody.querySelectorAll('.remove-btn').forEach((b) => { b.disabled = running; });
+}
+
+// Clears everything from the previous run (results table, live log, status,
+// export) so "2. Run" and "3. Export" don't keep showing results for a site
+// list that no longer matches.
+function resetRunPanel() {
+  siteReports = new Map();
+  expandedRows = new Set();
+  siteCards.innerHTML = '';
+  logOutput.textContent = '';
+  runStatus.textContent = '';
+  exportBtn.disabled = true;
 }
 
 function showWarnings(warnings) {
@@ -313,11 +330,22 @@ runBtn.addEventListener('click', async () => {
   }
 });
 
+// Several sites can be audited at once, so progress is "N of M finished"
+// rather than "site i of M".
+let validSitesTotal = 0;
+function updateProgress(total) {
+  validSitesTotal = total;
+  const reports = [...siteReports.values()];
+  const done = reports.filter((r) => r.done).length;
+  const active = reports.length - done;
+  runStatus.textContent = `Running — ${done}/${total} finished${active > 0 ? `, ${active} in progress` : ''}`;
+}
+
 function handleEvent(event) {
   switch (event.type) {
     case 'site-start':
-      runStatus.textContent = `Running ${event.index + 1}/${event.total}: ${event.site.name || event.site.url}`;
       siteReports.set(event.index, { name: event.site.name, url: event.site.url, widgets: null, results: [], done: false, ok: null });
+      updateProgress(event.total);
       renderResultsTable();
       break;
     case 'log':
@@ -338,7 +366,10 @@ function handleEvent(event) {
         r.ok = event.report.ok;
         r.error = event.report.error;
         r.widgets = event.report.widgets;
-        if (event.report.results && event.report.results.length > r.results.length) r.results = event.report.results;
+        // Groups can finish out of order when they run in parallel; the final
+        // report has them in a stable order, so prefer it over the streamed order.
+        if (event.report.results && event.report.results.length) r.results = event.report.results;
+        updateProgress(validSitesTotal);
         renderResultsTable();
       }
       break;

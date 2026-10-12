@@ -5,6 +5,7 @@
 
 const puppeteer = require('puppeteer');
 const { detectSearchWidgets, runSearchScenarios } = require('./searchChecks');
+const { runWithConcurrency, envInt } = require('./concurrency');
 
 async function launchBrowser() {
   return puppeteer.launch({
@@ -51,7 +52,7 @@ async function auditSite(site, browser, { onLog, onGroupComplete } = {}) {
       return { name: site.name, url: site.url, ok: true, widgets, results: [], skippedReason: 'no recognized search widget found' };
     }
 
-    const { results, diagnostics } = await runSearchScenarios(page, widgets, site.url, onGroupComplete);
+    const { results, diagnostics } = await runSearchScenarios(page, widgets, site.url, onGroupComplete, () => setupRealisticPage(browser));
     for (const r of results) log(`  [${r.status}] ${r.name}${r.detail ? ` — ${r.detail}` : ''}`);
 
     return { name: site.name, url: site.url, ok: true, widgets, results, diagnostics };
@@ -63,6 +64,16 @@ async function auditSite(site, browser, { onLog, onGroupComplete } = {}) {
   }
 }
 
+// How many sites are audited at the same time. Each site gets its own browser
+// tab (and, being a different host, its own rate-limit budget), so sites don't
+// interfere with each other; the cap just keeps a long list from opening dozens
+// of tabs at once. Override with AUDIT_CONCURRENCY (1 = one at a time).
+const DEFAULT_CONCURRENCY = 3;
+
+function getConcurrency() {
+  return envInt('AUDIT_CONCURRENCY', DEFAULT_CONCURRENCY);
+}
+
 function slugify(name) {
   return String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
@@ -71,4 +82,4 @@ function timestamp() {
   return new Date().toISOString().replace(/[:.]/g, '-');
 }
 
-module.exports = { launchBrowser, setupRealisticPage, auditSite, slugify, timestamp };
+module.exports = { launchBrowser, setupRealisticPage, auditSite, runWithConcurrency, getConcurrency, slugify, timestamp };

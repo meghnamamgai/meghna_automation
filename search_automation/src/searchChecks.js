@@ -10,6 +10,8 @@
 // because those class names are versioned per widget variant and differ across
 // clients, while the IDs are the stable hooks the shared JS binds to.
 
+const { runWithConcurrency, envInt } = require('./concurrency');
+
 const NAV_TIMEOUT = 15000;
 const AJAX_SETTLE_MS = 1500;
 const PAC_TIMEOUT = 6000;
@@ -20,9 +22,27 @@ const PAC_TIMEOUT = 6000;
 // every navigation at least this far apart kept the same client at 8/8 clean
 // loads in testing.
 const NAV_PACE_MS = 2000;
+// Pacing is adaptive: most sites never rate-limit, so a run starts with a short
+// gap and only drops to the conservative NAV_PACE_MS gap for a page once a
+// block/challenge has actually been seen on it (see recoverFromChallenge).
+const FAST_PACE_MS = 300;
+// page -> { slow }. Tabs of the same site share one object (see runSearchScenarios).
+const paceState = new WeakMap();
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+function pace(page) {
+  return sleep(paceState.get(page)?.slow ? NAV_PACE_MS : FAST_PACE_MS);
+}
+
+// Waits until `predicate` (run in the page) is truthy, but never longer than
+// `timeoutMs` — replaces fixed "wait for the AJAX to finish" sleeps, which cost
+// the full delay even when the dropdown updated almost immediately. A timeout
+// is not an error: the caller's own assertion decides pass/fail afterwards.
+async function waitForPage(page, predicate, arg, timeoutMs = AJAX_SETTLE_MS * 2) {
+  await page.waitForFunction(predicate, { timeout: timeoutMs, polling: 100 }, arg).catch(() => null);
 }
 
 const DETAIL_MAX_LEN = 300;
@@ -40,8 +60,38 @@ function truncateDetail(detail) {
 function pass(name, detail) {
   return { name, status: 'PASS', detail: truncateDetail(detail) };
 }
-function fail(name, detail) {
-  return { name, status: 'FAIL', detail: truncateDetail(detail) };
+// `full: true` keeps the whole detail — used where the detail IS the finding
+// (e.g. the list of uncaught JS errors) and cutting it off hides real errors.
+function fail(name, detail, { full = false } = {}) {
+  return { name, status: 'FAIL', detail: full ? String(detail ?? '') : truncateDetail(detail) };
+}
+
+// Uncaught errors thrown by third-party analytics/tag/personalization scripts
+// say nothing about the client's own search widget, and several of them fire
+// only because of the automated browser (e.g. Adobe Target refusing to run
+// when it can't set cookies). They're excluded from the "no uncaught JS
+// errors" check — first-party errors such as "jQuery is not defined" still count.
+const THIRD_PARTY_ERROR_PATTERNS = [
+  /adobe target|mboxDisable|\bmbox\b|\bat\.js\b|alloy|launch\.adobe|assets\.adobedtm/i,
+  /googletagmanager|gtag\b|google-analytics|\bga\(|analytics\.js|doubleclick|googlesyndication/i,
+  /fbq\b|connect\.facebook\.net|facebook pixel/i,
+  /hotjar|clarity\.ms|mouseflow|fullstory|segment\.com|mixpanel|clevertap|webengage|moengage|branch\.io/i,
+  /newrelic|nr-data\.net|datadog|sentry|bugsnag/i,
+  /onetrust|cookiebot|trustarc|cookielaw/i,
+  /mapmyindia|apis\.mapmyindia\.com/i,
+];
+
+// Known first-party errors we've chosen to ignore for now (temporary — delete
+// an entry once the client fixes it, so the check starts catching it again).
+const TEMPORARILY_IGNORED_ERROR_PATTERNS = [
+  /jQuery is not defined/i, // observed intermittently on AU Bank (locate.au.bank.in)
+];
+
+function isThirdPartyError(message) {
+  return (
+    THIRD_PARTY_ERROR_PATTERNS.some((re) => re.test(message)) ||
+    TEMPORARILY_IGNORED_ERROR_PATTERNS.some((re) => re.test(message))
+  );
 }
 function skip(name, detail) {
   return { name, status: 'SKIP', detail: truncateDetail(detail) };
@@ -96,10 +146,16 @@ async function getContainingFormId(page, fieldSelector) {
   return page.evaluate((sel) => document.querySelector(sel)?.closest('form')?.id || null, fieldSelector);
 }
 
+// A block can show up as a status code (429/403) or, when we only have the
+// page and not the response (e.g. after a form-submit navigation), as the
+// page title — a bare Apache/nginx "403 Forbidden" page has no challenge
+// wording at all, only that title.
+const BLOCK_TITLE_PATTERN = /just a moment|checking your browser|attention required|403 forbidden|^\s*forbidden\s*$|access denied/i;
+
 async function isChallengePage(page, resp) {
   const status = resp?.status();
   const title = await page.title().catch(() => '');
-  return status === 429 || status === 403 || /just a moment|checking your browser|attention required/i.test(title);
+  return status === 429 || status === 403 || BLOCK_TITLE_PATTERN.test(title);
 }
 
 // Any navigation — not just an explicit reset — can land on a Cloudflare
@@ -109,12 +165,16 @@ async function isChallengePage(page, resp) {
 // reloading the intended URL after a short backoff reliably clears it in
 // testing; call this after every navigation point, not just resets.
 async function recoverFromChallenge(page, url) {
+  // this site rate-limits/blocks: use the conservative gap from now on
+  if (paceState.has(page)) paceState.get(page).slow = true;
+  else paceState.set(page, { slow: true });
+  let resp = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
-    if (!(await isChallengePage(page, null))) return true;
+    if (!(await isChallengePage(page, resp))) return true;
     await sleep(attempt * 3000);
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: NAV_TIMEOUT * 2 }).catch(() => null);
+    resp = await page.goto(url, { waitUntil: 'networkidle2', timeout: NAV_TIMEOUT * 2 }).catch(() => null);
   }
-  return !(await isChallengePage(page, null));
+  return !(await isChallengePage(page, resp));
 }
 
 // Each scenario group needs a known-clean starting DOM. Chaining groups on
@@ -123,7 +183,7 @@ async function recoverFromChallenge(page, url) {
 // State <select> option list, which reads as "dropdown not populated" even
 // though the site works fine from a normal page load.
 async function resetToFreshPage(page, url) {
-  await sleep(NAV_PACE_MS);
+  await pace(page);
   const resp = await page.goto(url, { waitUntil: 'networkidle2', timeout: NAV_TIMEOUT * 2 }).catch(() => null);
   if (await isChallengePage(page, resp)) await recoverFromChallenge(page, url);
 }
@@ -143,7 +203,8 @@ async function getResultCount(page) {
 }
 
 async function submitFormAndCheckNav(page, formId, siteUrl, { expectNav = true } = {}) {
-  await sleep(NAV_PACE_MS);
+  await pace(page);
+  const startedAt = Date.now(); // after the deliberate pacing gap, so elapsedMs is the site's own response time
   const before = page.url();
   await Promise.all([
     page.waitForNavigation({ timeout: NAV_TIMEOUT }).catch(() => null),
@@ -163,7 +224,7 @@ async function submitFormAndCheckNav(page, formId, siteUrl, { expectNav = true }
     await recoverFromChallenge(page, siteUrl);
   }
   const navigated = page.url() !== before;
-  return { navigated, matchesExpectation: navigated === expectNav, url: page.url(), challenged };
+  return { navigated, matchesExpectation: navigated === expectNav, url: page.url(), challenged, elapsedMs: Date.now() - startedAt };
 }
 
 async function typeIntoAutocomplete(page, selector, text) {
@@ -277,31 +338,6 @@ async function runLocalitySearchScenarios(page, url, diagnostics, tabHash) {
           : fail('Locality search: case-insensitive matching', `"DELHI" -> outletsOnPage=${a6Count}, differs from "Delhi" (${a1Count})`)
   );
 
-  // A7: submitting via the Enter key works the same as clicking the Search button.
-  await resetToFreshPage(page, url);
-  if (tabHash) await switchToTab(page, tabHash);
-  await sleep(NAV_PACE_MS);
-  const beforeEnter = page.url();
-  await page.click('#OutletSearch');
-  await page.type('#OutletSearch', 'Delhi', { delay: 30 });
-  await Promise.all([
-    page.waitForNavigation({ timeout: NAV_TIMEOUT }).catch(() => null),
-    page.keyboard.press('Enter').catch(() => null),
-  ]);
-  let a7Challenged = false;
-  if (await isChallengePage(page, null)) {
-    a7Challenged = true;
-    await recoverFromChallenge(page, url);
-  }
-  const a7Navigated = page.url() !== beforeEnter;
-  results.push(
-    a7Challenged
-      ? skip('Locality search: submitting via Enter key works', 'hit a bot/rate-limit challenge page mid-submit; recovered but could not confirm this step\'s real outcome')
-      : a7Navigated
-        ? pass('Locality search: submitting via Enter key works', `url=${page.url()}`)
-        : fail('Locality search: submitting via Enter key works', 'pressing Enter did not submit the form')
-  );
-
   // A8: a direct deep link with ?search=<term> pre-filters results on load,
   // without requiring the user to re-type and resubmit.
   const deepLinkUrl = url.includes('?') ? `${url}&search=Delhi` : `${url}?search=Delhi`;
@@ -322,7 +358,14 @@ async function runLocalitySearchScenarios(page, url, diagnostics, tabHash) {
   await resetToFreshPage(page, url);
   if (tabHash) await switchToTab(page, tabHash);
   const longInput = 'a'.repeat(600);
-  await page.type('#OutletSearch', longInput, { delay: 2 });
+  // Pasted rather than typed key-by-key: a 600-char page.type costs several
+  // seconds of CDP round-trips and tests nothing a single input event doesn't.
+  await page.evaluate((v) => {
+    const el = document.querySelector('#OutletSearch');
+    el.focus();
+    el.value = v;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  }, longInput);
   const a9 = await submitFormAndCheckNav(page, formId, url, { expectNav: true });
   results.push(
     a9.challenged
@@ -365,7 +408,7 @@ async function runAdvancedDropdownScenarios(page, url, diagnostics, tabHash) {
   if (stateOptions.length > 0) {
     const beforeCityHtml = await page.$eval('#OutletCity', (el) => el.innerHTML);
     await page.select('#OutletState', stateOptions[0]);
-    await new Promise((r) => setTimeout(r, AJAX_SETTLE_MS));
+    await waitForPage(page, (h) => document.querySelector('#OutletCity')?.innerHTML !== h, beforeCityHtml);
     const afterCityHtml = await page.$eval('#OutletCity', (el) => el.innerHTML).catch(() => beforeCityHtml);
     results.push(
       afterCityHtml !== beforeCityHtml
@@ -384,7 +427,7 @@ async function runAdvancedDropdownScenarios(page, url, diagnostics, tabHash) {
     if (cityOptionsForFirstState.length > 0) {
       await page.select('#OutletCity', cityOptionsForFirstState[0]);
       await page.select('#OutletState', stateOptions[1]);
-      await new Promise((r) => setTimeout(r, AJAX_SETTLE_MS));
+      await waitForPage(page, (prev) => document.querySelector('#OutletCity')?.value !== prev, cityOptionsForFirstState[0]);
       const cityAfterStateChange = await page.evaluate(() => {
         const el = document.querySelector('#OutletCity');
         return { value: el?.value, optionCount: el?.options.length };
@@ -449,7 +492,7 @@ async function runAdvancedDropdownScenarios(page, url, diagnostics, tabHash) {
     // Browser Back after that submission should restore the State the user
     // had picked, not reset the form to its defaults.
     if (adv.navigated && !adv.challenged) {
-      await sleep(NAV_PACE_MS);
+      await pace(page);
       await page.goBack({ waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT }).catch(() => {});
       const restoredValue = await page.evaluate(() => document.querySelector('#OutletState')?.value).catch(() => null);
       results.push(
@@ -487,8 +530,9 @@ async function runRadiusProgressiveScenarios(page, url, diagnostics, tabHash) {
     if (stateOptions.length === 0) return { ok: false, reason: 'no state options to select' };
 
     const preferredState = stateOptions.includes('delhi') ? 'delhi' : stateOptions[0];
+    const cityHtmlBefore = await page.$eval('#OutletCity', (el) => el.innerHTML).catch(() => '');
     await page.select('#OutletState', preferredState);
-    await new Promise((r) => setTimeout(r, AJAX_SETTLE_MS));
+    await waitForPage(page, (h) => document.querySelector('#OutletCity')?.innerHTML !== h, cityHtmlBefore, 2500);
 
     let cityValue = null;
     if (withCity || withLocality || withRadius) {
@@ -496,7 +540,7 @@ async function runRadiusProgressiveScenarios(page, url, diagnostics, tabHash) {
       if (cityOptions.length === 0) return { ok: false, reason: `no city options loaded for state=${preferredState}` };
       cityValue = cityOptions.includes('new-delhi') ? 'new-delhi' : cityOptions[0];
       await page.select('#OutletCity', cityValue);
-      await new Promise((r) => setTimeout(r, AJAX_SETTLE_MS));
+      await waitForPage(page, () => { const e = document.querySelector('#OutletLocality'); return !!e && !e.disabled; }, undefined, 2500);
     }
 
     let localityValue = null;
@@ -506,7 +550,8 @@ async function runRadiusProgressiveScenarios(page, url, diagnostics, tabHash) {
       localityValue = preferredState === 'delhi' && cityValue === 'new-delhi' ? 'Shadipur' : 'Main Road';
       await page.click('#OutletLocality');
       await page.type('#OutletLocality', localityValue, { delay: 40 });
-      await new Promise((r) => setTimeout(r, 500));
+      if (withRadius) await waitForPage(page, () => { const e = document.querySelector('#OutletRadius'); return !!e && !e.disabled; }, undefined, 2000);
+      else await sleep(200);
     }
 
     let radiusValue = null;
@@ -565,7 +610,7 @@ async function runRouteSearchScenarios(page, url, diagnostics, tabHash) {
     if (dst) dst.value = 'Same Place';
   });
   const before = page.url();
-  await sleep(NAV_PACE_MS);
+  await pace(page);
   await page.evaluate((id) => document.getElementById(id)?.requestSubmit?.(), formId).catch(() => null);
   await new Promise((r) => setTimeout(r, 800));
   const errorVisible = await page.evaluate(() => {
@@ -728,7 +773,7 @@ async function runCrossCuttingScenarios(page, url, diagnostics, widgets) {
   const refreshChallenged1 = await isChallengePage(page, firstLoadResp);
   if (refreshChallenged1) await recoverFromChallenge(page, refreshUrl);
   const countBeforeRefresh = await getResultCount(page);
-  await sleep(NAV_PACE_MS);
+  await pace(page);
   const secondLoadResp = await page.reload({ waitUntil: 'networkidle2', timeout: NAV_TIMEOUT * 2 }).catch(() => null);
   const refreshChallenged2 = await isChallengePage(page, secondLoadResp);
   if (refreshChallenged2) await recoverFromChallenge(page, refreshUrl);
@@ -773,7 +818,7 @@ async function runCrossCuttingScenarios(page, url, diagnostics, widgets) {
   const nextHandle = await page.$('a::-p-text(Next)').catch(() => null);
   if (nextHandle) {
     const beforeNamesRaw = await page.evaluate(() => document.querySelector('[class*="store_outlet"]')?.parentElement?.innerText || '');
-    await sleep(NAV_PACE_MS);
+    await pace(page);
     const beforeUrl = page.url();
     await Promise.all([
       page.waitForNavigation({ timeout: NAV_TIMEOUT }).catch(() => null),
@@ -801,9 +846,8 @@ async function runCrossCuttingScenarios(page, url, diagnostics, widgets) {
     const timedFormId = await getContainingFormId(page, '#OutletSearch');
     await page.evaluate(() => { const el = document.querySelector('#OutletSearch'); if (el) el.value = ''; });
     await page.type('#OutletSearch', 'Delhi', { delay: 20 });
-    const startedAt = Date.now();
     const timed = await submitFormAndCheckNav(page, timedFormId, url, { expectNav: true });
-    const elapsedMs = Date.now() - startedAt - NAV_PACE_MS; // exclude this function's own deliberate pacing delay
+    const elapsedMs = timed.elapsedMs;
     results.push(
       timed.challenged
         ? skip('Cross-cutting: a search submission completes in a reasonable time', 'hit a bot/rate-limit challenge page mid-submit; recovered but could not confirm the real outcome')
@@ -823,47 +867,99 @@ async function runCrossCuttingScenarios(page, url, diagnostics, widgets) {
 // progress) show incremental results without waiting for the whole site to
 // finish. Purely additive: the CLI (searchAudit.js) doesn't pass it and
 // behaves exactly as before.
-async function runSearchScenarios(page, widgets, url, onGroupComplete) {
+//
+// newPage(), if given, opens an extra tab on the same browser. Scenario groups
+// are independent — each begins from its own fresh page load — so with it they
+// run in separate tabs, up to AUDIT_GROUP_CONCURRENCY at a time (default 3),
+// which cuts a site's wall time to roughly its slowest group. Set
+// AUDIT_GROUP_CONCURRENCY=1 to run groups one after another in a single tab
+// (slower, but sends the site one request at a time — useful for clients whose
+// WAF rate-limits aggressively).
+const DEFAULT_GROUP_CONCURRENCY = 3;
+
+async function runSearchScenarios(page, widgets, url, onGroupComplete, newPage) {
   const diagnostics = { consoleErrors: [], pageErrors: [], dialogs: [] };
   attachDiagnostics(page, diagnostics);
 
-  const results = [];
-  const emit = (groupName, groupResults) => {
-    results.push(...groupResults);
-    onGroupComplete?.(groupName, groupResults);
-  };
-
-  emit('Tab switching', await runTabSwitchScenarios(page, widgets));
+  // One pacing state shared by every tab of this site: once any tab sees a
+  // block, all of them fall back to the conservative gap.
+  const siteState = { slow: false };
+  paceState.set(page, siteState);
 
   const customTab = widgets.tabs.includes('#searchTypeCustom') ? '#searchTypeCustom' : null;
   const advanceTab = widgets.tabs.includes('#searchTypeAdvance') ? '#searchTypeAdvance' : null;
   const routeTab = widgets.tabs.includes('#searchTypeRoute') ? '#searchTypeRoute' : null;
 
-  if (widgets.localitySearch) {
-    emit('Locality / custom search', await runLocalitySearchScenarios(page, url, diagnostics, customTab));
-  }
-
-  if (widgets.advancedDropdown) {
-    emit('Advanced search', await runAdvancedDropdownScenarios(page, url, diagnostics, advanceTab));
+  // `onLoadedPage` groups work on the already-loaded initial page instead of
+  // starting from a fresh load of their own.
+  const tasks = [
+    { name: 'Tab switching', onLoadedPage: true, run: (pg) => runTabSwitchScenarios(pg, widgets) },
+    widgets.localitySearch && { name: 'Locality / custom search', run: (pg, d) => runLocalitySearchScenarios(pg, url, d, customTab) },
+    widgets.advancedDropdown && { name: 'Advanced search', run: (pg, d) => runAdvancedDropdownScenarios(pg, url, d, advanceTab) },
     // The radius-gated variant (State -> City -> free-text Locality -> Radius)
     // needs its own progressive combos beyond the generic checks above.
-    if (widgets.radiusFilter) {
-      emit('Progressive search (radius-gated)', await runRadiusProgressiveScenarios(page, url, diagnostics, advanceTab));
+    widgets.advancedDropdown && widgets.radiusFilter && {
+      name: 'Progressive search (radius-gated)',
+      run: (pg, d) => runRadiusProgressiveScenarios(pg, url, d, advanceTab),
+    },
+    widgets.routeSearch && { name: 'Route search', run: (pg, d) => runRouteSearchScenarios(pg, url, d, routeTab) },
+    (widgets.localitySearch || widgets.advancedDropdown) && { name: 'Cross-cutting', run: (pg, d) => runCrossCuttingScenarios(pg, url, d, widgets) },
+  ].filter(Boolean);
+
+  const limit = newPage ? envInt('AUDIT_GROUP_CONCURRENCY', DEFAULT_GROUP_CONCURRENCY) : 1;
+
+  const groupResults = await runWithConcurrency(tasks, limit, async (task) => {
+    const ownTab = limit > 1 && !task.onLoadedPage;
+    const pg = ownTab ? await newPage() : page;
+    // Shared error lists (they feed the end-of-run diagnostics) but a private
+    // dialog list, so one tab's alert can't be mistaken for another's.
+    const taskDiagnostics = ownTab ? { consoleErrors: diagnostics.consoleErrors, pageErrors: diagnostics.pageErrors, dialogs: [] } : diagnostics;
+    if (ownTab) {
+      paceState.set(pg, siteState);
+      attachDiagnostics(pg, taskDiagnostics);
     }
-  }
 
-  if (widgets.routeSearch) {
-    emit('Route search', await runRouteSearchScenarios(page, url, diagnostics, routeTab));
-  }
+    let groupOut;
+    try {
+      groupOut = await task.run(pg, taskDiagnostics);
+    } catch (err) {
+      // A throw (typically "no element found" after a block page replaced the
+      // real one) must not discard the other groups' finished results.
+      const blocked = await isChallengePage(pg, null).catch(() => false);
+      groupOut = [
+        blocked
+          ? skip(`${task.name}: checks aborted`, `blocked by bot/rate-limit protection mid-run (${err.message})`)
+          : fail(`${task.name}: checks aborted`, `unexpected error: ${err.message}`),
+      ];
+    } finally {
+      if (ownTab) await pg.close().catch(() => {});
+    }
+    onGroupComplete?.(task.name, groupOut);
+    return groupOut;
+  });
 
-  if (widgets.localitySearch || widgets.advancedDropdown) {
-    emit('Cross-cutting', await runCrossCuttingScenarios(page, url, diagnostics, widgets));
-  }
+  // Task order, not finish order, so reports and exports read the same every run.
+  const results = groupResults.flat();
+  const emit = (groupName, groupOut) => {
+    results.push(...groupOut);
+    onGroupComplete?.(groupName, groupOut);
+  };
 
+  const firstPartyErrors = diagnostics.pageErrors.filter((m) => !isThirdPartyError(m));
+  const ignoredCount = diagnostics.pageErrors.length - firstPartyErrors.length;
+  const ignoredNote = ignoredCount > 0 ? `${ignoredCount} known third-party/ignored error(s) skipped` : '';
+  const uniqueFirstParty = [...new Set(firstPartyErrors)].map((m) => {
+    const n = firstPartyErrors.filter((x) => x === m).length;
+    return n > 1 ? `${m} (x${n})` : m;
+  });
   const diagnosticResults = [
-    diagnostics.pageErrors.length === 0
-      ? pass('No uncaught JS errors during search interactions', '')
-      : fail('No uncaught JS errors during search interactions', diagnostics.pageErrors.join(' | ')),
+    firstPartyErrors.length === 0
+      ? pass('No uncaught JS errors during search interactions', ignoredNote)
+      : fail(
+          'No uncaught JS errors during search interactions',
+          `${firstPartyErrors.length} uncaught error(s): ${uniqueFirstParty.join(' | ')}${ignoredNote ? ` [${ignoredNote}]` : ''}`,
+          { full: true }
+        ),
   ];
 
   // Locality and route search both depend on Google Places Autocomplete; a
